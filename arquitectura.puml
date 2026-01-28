@@ -1,0 +1,32 @@
+@startuml Arquitectura
+skinparam componentStyle rectangle
+title PWA To-Do Offline - Arquitectura (3 archivos)
+
+actor Usuario as user
+
+rectangle "Navegador (Chrome)" as browser {
+  component "index.html\n(UI + CSS + JS)" as html
+  component "manifest.json\n(Metadata instalación)" as manifest
+  component "sw.js\n(Service Worker)" as sw
+
+  database "localStorage\n(tareas)" as ls
+  database "Cache Storage\n(App Shell)" as cache
+}
+
+user --> html : Interactúa\n(agregar/completar/eliminar)
+html --> ls : Guardar/leer tareas\n(JSON)
+html --> sw : register('./sw.js')
+
+sw --> cache : install()\nprecache APP_SHELL
+html --> browser : Requests\n(index/manifest/sw)
+browser --> sw : fetch events (GET)
+sw --> cache : cache-first\nmatch/put
+
+note right of cache
+APP_SHELL:
+- index.html
+- manifest.json
+- sw.js
+end note
+
+@enduml

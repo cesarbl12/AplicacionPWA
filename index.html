@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#111827" />
+  <title>To-Do PWA Offline</title>
+
+  <!-- Manifest -->
+  <link rel="manifest" href="./manifest.json" />
+  <meta name="description" content="Lista de tareas PWA offline (1 HTML + manifest + SW)" />
+
+  <style>
+    :root{
+      --bg:#0b1220;
+      --card:#111827;
+      --text:#e5e7eb;
+      --muted:#9ca3af;
+      --border:#1f2937;
+      --accent:#22c55e;
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0; font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;
+      background:var(--bg); color:var(--text);
+    }
+    .container{ max-width:720px; margin:0 auto; padding:24px; }
+    h1{ margin:0; font-size:28px; }
+    .sub{ margin:6px 0 0; color:var(--muted); }
+    .card{
+      margin-top:18px; background:var(--card);
+      border:1px solid var(--border); border-radius:14px;
+      padding:16px;
+    }
+    .row{ display:flex; gap:10px; align-items:center; margin-bottom:12px; }
+    .row-between{ justify-content:space-between; }
+    input[type="text"]{
+      flex:1; padding:12px; border-radius:10px;
+      border:1px solid var(--border); background:#0b1020; color:var(--text);
+      outline:none;
+    }
+    button{
+      padding:12px 14px; border-radius:10px; cursor:pointer;
+      border:1px solid var(--border); background:#0b1020; color:var(--text);
+    }
+    button:hover{ border-color:#334155; }
+    .btn-secondary{ color:var(--muted); }
+    .list{ list-style:none; padding:0; margin:0; }
+    .item{
+      display:flex; gap:10px; align-items:center;
+      padding:10px 8px; border-top:1px solid var(--border);
+    }
+    .item:first-child{ border-top:none; }
+    .title{ flex:1; word-break:break-word; }
+    .item.done .title{ text-decoration:line-through; color:var(--muted); }
+    .badge{ font-size:12px; color:var(--muted); }
+    .icon-btn{ background:transparent; border:1px solid transparent; padding:8px; }
+    .icon-btn:hover{ border-color:var(--border); }
+    .empty{ margin:12px 0 0; color:var(--muted); }
+    .footer{ margin-top:14px; color:var(--muted); display:flex; gap:10px; justify-content:space-between; flex-wrap:wrap; }
+    .chip{ font-size:12px; color:var(--muted); border:1px solid var(--border); padding:6px 10px; border-radius:999px; }
+    .ok{ color:var(--accent); }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <header>
+      <h1>To-Do</h1>
+      <p class="sub">PWA offline (1 HTML + manifest.json + sw.js)</p>
+    </header>
+
+    <section class="card">
+      <form id="taskForm" class="row" autocomplete="off">
+        <input id="taskInput" type="text" placeholder="Escribe una tarea…" required />
+        <button type="submit">Agregar</button>
+      </form>
+
+      <div class="row row-between">
+        <label class="chip">
+          <input id="hideDone" type="checkbox" />
+          Ocultar completadas
+        </label>
+
+        <div class="row" style="margin:0">
+          <button id="installBtn" type="button" class="btn-secondary" style="display:none">Instalar</button>
+          <button id="clearDone" type="button" class="btn-secondary">Limpiar completadas</button>
+        </div>
+      </div>
+
+      <ul id="taskList" class="list"></ul>
+      <p id="emptyState" class="empty">No hay tareas. Agrega una 🙂</p>
+    </section>
+
+    <footer class="footer">
+      <small id="status">Listo.</small>
+      <small id="swStatus" class="chip">SW: <span id="swDot">—</span></small>
+    </footer>
+  </main>
+
+  <script>
+    // ====== Modelo simple en localStorage (offline) ======
+    const $ = (sel) => document.querySelector(sel);
+
+    const taskForm = $("#taskForm");
+    const taskInput = $("#taskInput");
+    const taskList = $("#taskList");
+    const emptyState = $("#emptyState");
+    const hideDone = $("#hideDone");
+    const clearDone = $("#clearDone");
+    const statusEl = $("#status");
+
+    const installBtn = $("#installBtn");
+    let deferredInstallPrompt = null;
+
+    const STORAGE_KEY = "todo_pwa_tasks_v1";
+    let tasks = loadTasks();
+
+    function uid() {
+      return (crypto?.randomUUID?.() ?? (Date.now() + "-" + Math.random().toString(16).slice(2)));
+    }
+
+    function loadTasks() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function saveTasks() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+    }
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function render() {
+      const filtered = hideDone.checked ? tasks.filter(t => !t.done) : tasks;
+
+      taskList.innerHTML = "";
+      emptyState.style.display = filtered.length ? "none" : "block";
+
+      for (const t of filtered) {
+        const li = document.createElement("li");
+        li.className = "item" + (t.done ? " done" : "");
+        li.dataset.id = t.id;
+
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = t.done;
+        cb.addEventListener("change", () => toggleDone(t.id));
+
+        const title = document.createElement("span");
+        title.className = "title";
+        title.textContent = t.title;
+
+        const meta = document.createElement("span");
+        meta.className = "badge";
+        meta.textContent = new Date(t.createdAt).toLocaleString();
+
+        const del = document.createElement("button");
+        del.className = "icon-btn";
+        del.type = "button";
+        del.title = "Eliminar";
+        del.textContent = "🗑️";
+        del.addEventListener("click", () => removeTask(t.id));
+
+        li.append(cb, title, meta, del);
+        taskList.appendChild(li);
+      }
+    }
+
+    function addTask(title) {
+      const trimmed = title.trim();
+      if (!trimmed) return;
+
+      tasks.unshift({
+        id: uid(),
+        title: trimmed,
+        done: false,
+        createdAt: Date.now()
+      });
+
+      saveTasks();
+      render();
+      setStatus("Tarea agregada.");
+    }
+
+    function toggleDone(id) {
+      tasks = tasks.map(t => t.id === id ? { ...t, done: !t.done } : t);
+      saveTasks();
+      render();
+      setStatus("Actualizado.");
+    }
+
+    function removeTask(id) {
+      tasks = tasks.filter(t => t.id !== id);
+      saveTasks();
+      render();
+      setStatus("Tarea eliminada.");
+    }
+
+    function clearCompleted() {
+      const before = tasks.length;
+      tasks = tasks.filter(t => !t.done);
+      const removed = before - tasks.length;
+      saveTasks();
+      render();
+      setStatus(removed ? `Eliminadas ${removed} completadas.` : "No había completadas.");
+    }
+
+    taskForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      addTask(taskInput.value);
+      taskInput.value = "";
+      taskInput.focus();
+    });
+
+    hideDone.addEventListener("change", render);
+    clearDone.addEventListener("click", clearCompleted);
+
+    render();
+
+    // ====== Install prompt (opcional) ======
+    window.addEventListener("beforeinstallprompt", (e) => {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      installBtn.style.display = "inline-block";
+      setStatus("Instalación disponible.");
+    });
+
+    installBtn.addEventListener("click", async () => {
+      if (!deferredInstallPrompt) return;
+      deferredInstallPrompt.prompt();
+      await deferredInstallPrompt.userChoice;
+      deferredInstallPrompt = null;
+      installBtn.style.display = "none";
+      setStatus("Listo.");
+    });
+
+    // ====== Registro del Service Worker ======
+    const swDot = $("#swDot");
+    async function registerSW(){
+      if (!("serviceWorker" in navigator)) {
+        swDot.textContent = "No soportado";
+        return;
+      }
+      try {
+        const reg = await navigator.serviceWorker.register("./sw.js");
+        swDot.textContent = "Activo";
+        swDot.classList.add("ok");
+
+        // Si hay actualización, la detectas aquí (base simple)
+        reg.addEventListener("updatefound", () => {
+          setStatus("Actualización del SW detectada.");
+        });
+      } catch (err) {
+        swDot.textContent = "Error";
+        console.error(err);
+      }
+    }
+    window.addEventListener("load", registerSW);
+  </script>
+</body>
+</html>
